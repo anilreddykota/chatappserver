@@ -10,10 +10,11 @@ const io = require("socket.io")(server, {
       callback(null, true);
     },
     cors: {
-      origin: 'https://ichatwithyou.vercel.app',
+      origin: ['https://ichatwithyou.vercel.app',"http://localhost:3000"],
       methods: ['GET', 'POST'],
     }
   });
+  
 const cors = require('cors'); 
 app.use(cors());
 app.use(express.json());
