@@ -4,14 +4,13 @@ const firebaseAdmin = require('firebase-admin');
 const bcrypt = require('bcrypt');
 const app = express();
 const http = require('http');
-const socketIO = require('socket.io');
 const server = http.createServer(app);
 const io = require("socket.io")(server, {
     allowRequest: (req, callback) => {
       callback(null, true);
     },
     cors: {
-      origin: 'http://localhost:3000',
+      origin: 'https://ichatwithyou.vercel.app',
       methods: ['GET', 'POST'],
     }
   });
@@ -197,7 +196,7 @@ io.on('connection', (socket) => {
             // Emit the message to the receiver
             io.to(receiverId).emit('newMessage', { senderId, receiverId, text, timestamp, conversationId });
 
-            console.log('Message sent successfully');
+            // console.log('Message sent successfully');
         } catch (error) {
             console.error('Error sending message:', error);
         }
