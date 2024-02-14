@@ -153,7 +153,6 @@ io.on('connection', (socket) => {
     }
 
     // Send a welcome message to the specific user who joined
-    io.to(userId).emit('newMessage', { senderId: 'system', text: 'Welcome to the chat!' });
   });
   socket.on('typing', ({ senderId, receiverId, isTyping }) => {
     // Update the typing status of the sender
