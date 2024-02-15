@@ -1,6 +1,7 @@
-// server.js
 const express = require('express');
 const firebaseAdmin = require('firebase-admin');
+const adminFirestore = require('firebase-admin');
+const adminMessaging = require('firebase-admin');
 const bcrypt = require('bcrypt');
 const app = express();
 const http = require('http');
@@ -18,15 +19,36 @@ const io = require("socket.io")(server, {
 const cors = require('cors');
 app.use(cors());
 app.use(express.json());
-// Initialize Firebase Admin SDK
-const serviceAccount = require('./newkey.json');
-const { send } = require('process');
-firebaseAdmin.initializeApp({
-  credential: firebaseAdmin.credential.cert(serviceAccount),
-  storageBucket: 'chatappsocketanil.appspot.com'
-});
 
-const db = firebaseAdmin.firestore();
+// Check if the default app is already initialized
+if (!firebaseAdmin.apps.length) {
+  // Initialize default Firebase app for Firestore
+  const serviceAccountFirestore = require('./newkey.json');
+  adminFirestore.initializeApp({
+    credential: adminFirestore.credential.cert(serviceAccountFirestore),
+    storageBucket: 'chatappsocketanil.appspot.com'
+
+  });
+}
+
+// Initialize default Firebase app for Messaging
+const serviceAccountMessaging = require('./auth.json');
+const { error } = require('console');
+adminMessaging.initializeApp({
+  credential: adminMessaging.credential.cert(serviceAccountMessaging),
+  storageBucket: 'chatappsocketanil.appspot.com'
+}, "messages");
+
+// Use the adminFirestore instance for Firestore operations
+const db = adminFirestore.firestore();
+
+// Use the adminMessaging instance for Firebase Cloud Messaging
+const messaging = adminMessaging.messaging();
+
+// Now you can use 'db' for Firestore operations and 'messaging' for FCM
+
+
+// Now you can use 'db' for Firestore operations and 'messaging' for FCM
 
 // Implement your Firebase Authentication routes and Firestore interactions here
 app.post('/register', async (req, res) => {
@@ -83,7 +105,7 @@ app.post('/login', async (req, res) => {
 
     // Compare the provided password with the stored hash
     const passwordMatch = await bcrypt.compare(password, userData.password);
-    console.log(passwordMatch, password, userData)
+    // console.log(passwordMatch, password, userData)
 
     if (passwordMatch) {
       // Passwords match, user authenticated
@@ -115,6 +137,74 @@ app.get('/users', async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+app.post('/api/save-fcm-token', async (req, res) => {
+  const { token, userId } = req.body;
+
+  try {
+    // Check if the FCM token already exists for the user
+    const tokenRef = await db.collection("users").doc(userId).collection("tokens").where("token", "==", token).get();
+
+    if (tokenRef.empty) {
+      // If the token does not exist, add it to the collection
+      await db.collection("users").doc(userId).collection("tokens").add({
+        token,
+      });
+
+      res.status(200).json({ message: 'FCM token received and saved successfully' });
+    } else {
+      res.status(200).json({ message: 'FCM token already exists for this user' });
+    }
+  } catch (error) {
+    console.error('Error saving/retrieving FCM token:', error.message);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+app.post('/logout', (req, res) => {
+  const { userId } = req.body;
+
+  // Delete tokens from the "tokens" collection of the specified user
+  const tokensCollection = db.collection("users").doc(userId).collection("tokens");
+
+  tokensCollection.get()
+    .then((snapshot) => {
+      if (snapshot.empty) {
+        console.log('No tokens found for the user');
+        return;
+      }
+
+      // Delete each document in the "tokens" collection
+      const deletePromises = snapshot.docs.map((doc) => doc.ref.delete());
+
+      // Wait for all delete operations to complete
+      return Promise.all(deletePromises);
+    })
+    .then(() => {
+      console.log('Tokens deleted successfully');
+      res.status(200).json({ message: 'Tokens deleted successfully' });
+    })
+    .catch((error) => {
+      console.error('Error deleting tokens:', error);
+      res.status(500).json({ error: 'Internal Server Error' });
+    });
+});
+const sendPushNotification = async (token, text) => {
+  try {
+    const message = {
+      data: {
+        message: text,
+        title: 'new message received',
+      },
+      token: token
+    };
+
+    await messaging.send(message);
+  } catch (error) {
+
+    // console.log(error);
+  }
+};
+
 // Function to generate a unique conversation ID
 function generateConversationId(userId1, userId2) {
   // Sort the user IDs to ensure consistency
@@ -125,15 +215,18 @@ function generateConversationId(userId1, userId2) {
 }
 const onlineUsers = {};
 const typingUsers = {};
+const socketIds = {};
 
 io.on('connection', (socket) => {
   console.log('A user connected:', socket.id);
   // Handle 'join' event when a user joins the chat
   socket.on('join', async ({ userId, reciverId }) => {
     socket.join(userId);
+    socketIds[userId] = socket.id;
     onlineUsers[userId] = true; // Set user online
     console.log(`User ${userId} joined the chat with ${reciverId}`);
-    io.emit('userStatus', { userId, isOnline: onlineUsers[reciverId] });
+
+
     try {
       // Generate a unique conversation ID based on user IDs
       const conversationId = generateConversationId(userId, reciverId);
@@ -147,32 +240,48 @@ io.on('connection', (socket) => {
       });
 
       // Emit the 'previousMessages' event to the specific user who joined
-      io.to(userId).emit('previousMessages', { messages });
+      io.to(socketIds[userId]).emit('previousMessages', { messages });
     } catch (error) {
       console.error('Error fetching previous messages:', error);
     }
 
     // Send a welcome message to the specific user who joined
   });
+
+
+  socket.on("setoffline", ({ senderId, offline }) => {
+    onlineUsers[senderId] = offline;
+    io.emit("userStatus", { userId: senderId, isOnline: offline });
+    // console.log(onlineUsers)
+    // console.log(socketIds);
+  });
+  socket.on("checkUserStatus", (userId) => {
+    io.emit('userStatus', { userId, isOnline: onlineUsers[userId] });
+
+  })
+
+  // Handle 'typing' event
   socket.on('typing', ({ senderId, receiverId, isTyping }) => {
     // Update the typing status of the sender
-
     typingUsers[senderId] = isTyping;
 
     // Broadcast the 'typing' event to the recipient
-    io.to(receiverId).emit('typing', { userId: senderId, isTyping: typingUsers[receiverId] });
-
+    io.to(socketIds[receiverId]).emit('typing', { userId: senderId, isTyping: typingUsers[receiverId] });
 
     // Set a timeout to clear typing status after 3 seconds if not updated
     if (isTyping) {
       setTimeout(() => {
+        // Clear typing status
         typingUsers[senderId] = false;
+
+        // Broadcast the 'typing' event to the recipient with isTyping set to false
         if (receiverId) {
-          io.to(receiverId).emit('typing', { userId: senderId, isTyping: false });
+          io.to(socketIds[receiverId]).emit('typing', { userId: senderId, isTyping: false });
         }
       }, 3000);
     }
   });
+
   socket.on('getMessages', async ({ userId, reciverId }) => {
     try {
       // Generate a unique conversation ID based on user IDs
@@ -180,13 +289,13 @@ io.on('connection', (socket) => {
 
       const messagesRef = db.collection('messages').doc(conversationId).collection('messages');
       const snapshot = await messagesRef.orderBy('timestamp', 'asc').get();
-console.log(messages);
+      // console.log(messages);
       const messages = [];
       snapshot.forEach((doc) => {
         messages.push({ id: doc.id, ...doc.data() });
       });
       // Emit the 'previousMessages' event to the specific user who requested it
-      io.to(userId).emit('previousMessages', { messages });
+      io.to(socketIds[userId]).emit('previousMessages', { messages });
     } catch (error) {
       console.error('Error fetching previous messages:', error);
     }
@@ -216,11 +325,32 @@ console.log(messages);
 
       // Emit the message to the sender
       if (senderId !== receiverId) {
-        io.to(senderId).emit('newMessage', { senderId, receiverId, text, timestamp, conversationId });
+        io.to(socketIds[senderId]).emit('newMessage', { senderId, receiverId, text, timestamp, conversationId });
       }
 
       // Emit the message to the receiver
-      io.to(receiverId).emit('newMessage', { senderId, receiverId, text, timestamp, conversationId });
+      io.to(socketIds[receiverId]).emit('newMessage', { senderId, receiverId, text, timestamp, conversationId });
+      if (!onlineUsers[receiverId]) {
+        console.log('Sent push notification');
+        const tokensCollection = db.collection("users").doc(receiverId).collection("tokens");
+        tokensCollection.get()
+          .then((snapshot) => {
+            if (snapshot.empty) {
+              console.log('No tokens found for the user');
+              return;
+            }
+            // Process each document in the "tokens" collection
+            snapshot.forEach((doc) => {
+              const tokenData = doc.data();
+              sendPushNotification(tokenData.token, text)
+            });
+
+          })
+
+          .catch((error) => {
+            console.error('Error retrieving tokens:', error);
+          });
+      }
 
       // console.log('Message sent successfully');
     } catch (error) {
