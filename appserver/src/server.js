@@ -199,12 +199,12 @@ app.post('/logout', (req, res) => {
       res.status(500).json({ error: 'Internal Server Error' });
     });
 });
-const sendPushNotification = async (token, text,from) => {
+const sendPushNotification = async (token, text, from) => {
   try {
     const message = {
       data: {
         message: text,
-        from: from, 
+        from: from,
       },
       token: token
     };
@@ -341,11 +341,11 @@ io.on('connection', (socket) => {
 
       // Emit the message to the receiver
       io.to(socketIds[receiverId]).emit('newMessage', { senderId, receiverId, text, timestamp, conversationId });
+
       
-      if (!onlineUsers[receiverId]) {
         console.log('Sent push notification');
         const userDocRef = db.collection("users").doc(receiverId);
-  
+
         // Fetch user data including nickname
         userDocRef.get()
           .then((userDoc) => {
@@ -355,27 +355,28 @@ io.on('connection', (socket) => {
             }
             const userData = userDoc.data();
             const receiverNickname = userData.nickname;
-          });
 
-        const tokensCollection = userDocRef.collection("tokens");
-        tokensCollection.get()
-          .then((snapshot) => {
-            if (snapshot.empty) {
-              console.log('No tokens found for the user');
-              return;
-            }
-            // Process each document in the "tokens" collection
-            snapshot.forEach((doc) => {
-              const tokenData = doc.data();
-              sendPushNotification(tokenData.token, text,receiverNickname)
-            });
 
+            const tokensCollection = userDocRef.collection("tokens");
+            tokensCollection.get()
+              .then((snapshot) => {
+                if (snapshot.empty) {
+                  console.log('No tokens found for the user');
+                  return;
+                }
+                // Process each document in the "tokens" collection
+                snapshot.forEach((doc) => {
+                  const tokenData = doc.data();
+                  sendPushNotification(tokenData.token, text, receiverNickname)
+                });
+
+              })
           })
 
           .catch((error) => {
             console.error('Error retrieving tokens:', error);
           });
-      }
+      
 
       // console.log('Message sent successfully');
     } catch (error) {
