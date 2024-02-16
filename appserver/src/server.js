@@ -119,6 +119,17 @@ app.post('/login', async (req, res) => {
     res.status(500).json({ error: 'Internal Server Error' });
   }
 });
+app.post('/api/submit-feedback', async (req, res) => {
+  try {
+    const feedbackData = req.body;
+    // Add the feedback to the Firestore collection
+    const feedbackRef = await db.collection('feedback').add(feedbackData);
+    res.status(200).json({ message: 'Feedback added successfully' });
+  } catch (error) {
+    console.error('Error adding feedback:', error);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 app.get('/users', async (req, res) => {
   try {
     const usersSnapshot = await db.collection('users').get();
@@ -188,12 +199,12 @@ app.post('/logout', (req, res) => {
       res.status(500).json({ error: 'Internal Server Error' });
     });
 });
-const sendPushNotification = async (token, text) => {
+const sendPushNotification = async (token, text,from) => {
   try {
     const message = {
       data: {
         message: text,
-        title: 'new message received',
+        from: from, 
       },
       token: token
     };
@@ -330,9 +341,23 @@ io.on('connection', (socket) => {
 
       // Emit the message to the receiver
       io.to(socketIds[receiverId]).emit('newMessage', { senderId, receiverId, text, timestamp, conversationId });
+      
       if (!onlineUsers[receiverId]) {
         console.log('Sent push notification');
-        const tokensCollection = db.collection("users").doc(receiverId).collection("tokens");
+        const userDocRef = db.collection("users").doc(receiverId);
+  
+        // Fetch user data including nickname
+        userDocRef.get()
+          .then((userDoc) => {
+            if (!userDoc.exists) {
+              console.log('User document not found for the receiver');
+              return;
+            }
+            const userData = userDoc.data();
+            const receiverNickname = userData.nickname;
+          });
+
+        const tokensCollection = userDocRef.collection("tokens");
         tokensCollection.get()
           .then((snapshot) => {
             if (snapshot.empty) {
@@ -342,7 +367,7 @@ io.on('connection', (socket) => {
             // Process each document in the "tokens" collection
             snapshot.forEach((doc) => {
               const tokenData = doc.data();
-              sendPushNotification(tokenData.token, text)
+              sendPushNotification(tokenData.token, text,receiverNickname)
             });
 
           })
